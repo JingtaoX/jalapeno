@@ -1,0 +1,38 @@
+// Basic Filament example - minimal syntax
+
+import "primitives/core.fil";
+
+// A simple adder component
+comp Add[W]<'G: 1>(
+    go: interface['G],
+    left: ['G, 'G+1] W,
+    right: ['G, 'G+1] W,
+) -> (
+    out: ['G+1, 'G+2] W
+) where W > 0 {
+    add_comb := new AddComb[W];
+    result := add_comb<'G>(left, right);
+    reg := new Register[W]<'G, 'G+2>(result.out);
+    out = reg.out;
+}
+
+// A pipelined multiplier
+comp Mult[W]<'G: 1>(
+    go: interface['G],
+    left: ['G, 'G+1] W,
+    right: ['G, 'G+1] W,
+) -> (
+    out: ['G+3, 'G+4] W
+) where W > 0 {
+    // Stage 1: register inputs
+    l := new Register[W]<'G, 'G+2>(left);
+    r := new Register[W]<'G, 'G+2>(right);
+
+    // Stage 2: multiply
+    m := new MultComb[W]<'G+1>(l.out, r.out);
+    temp := new Register[W]<'G+1, 'G+3>(m.out);
+
+    // Stage 3: output
+    final := new Register[W]<'G+2, 'G+4>(temp.out);
+    out = final.out;
+}

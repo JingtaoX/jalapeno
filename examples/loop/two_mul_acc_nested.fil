@@ -1,0 +1,36 @@
+// sum[0] = 0
+// sum[i+1] = sum[i] + (a[i]*b[i]) + (c[i]*d[i]) for i=0..7
+
+comp TwoMulAccBundle<'G>(
+  a[8][2]: ['G, ?] 32,
+  b[8][2]: ['G, ?] 32,
+) -> (
+  out: [?, ?] 32,
+) {
+
+  pool M : Mult[32] * 2;  // 2 multipliers, latency=3
+  pool A : Add[32]  * 1;  // 1 adders, latency=1
+
+  // bundle of partial sums (9 values: s{0}..s{8})
+  bundle s[9]: ['G, 'G+1] 32;
+
+  zero := new Const[32, 0]<'G>();
+  s{0} = zero;
+
+  timeloop<?tloop='G> [II=?] for i in 0..8 {
+    bundle
+    spaceloop<?>  for j in 0..1{
+          m0 := M[?]<?tloop>(a{i}{0}, b{i}{0});
+          m1 := M[?]<?>(a{i}{1}, b{i}{1});
+    }
+
+
+    p  := A[?]<?ta=?tloop+[3..]>(m0.out, m1.out);
+    r  := A[?]<?ta+[..1]>(s{i}, p.out);
+
+    s{i+1} = r.out;
+  }
+
+  two := new Const[32, 2]<'G>();
+  out := M[?]<?tloop.e+1>(s{9}, two);
+}

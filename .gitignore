@@ -1,0 +1,68 @@
+# ======================
+# Python bytecode / cache
+# ======================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ======================
+# Virtual environments
+# ======================
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ======================
+# Python tooling caches
+# ======================
+.mypy_cache/
+.pytest_cache/
+.pyre/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ======================
+# VS Code (Remote-SSH friendly)
+# ======================
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+
+# ======================
+# OS junk
+# ======================
+.DS_Store
+Thumbs.db
+
+# ======================
+# Logs / temp files
+# ======================
+*.log
+*.tmp
+
+# ======================
+# Build / generated artifacts
+# (safe for research repos)
+# ======================
+build/
+dist/
+target/
+*.egg-info/
+
+# ======================
+# Jupyter (optional)
+# ======================
+.ipynb_checkpoints/
+
+# ======================
+# Claude Code
+# ======================
+.claude/
+
+
+*.pdf

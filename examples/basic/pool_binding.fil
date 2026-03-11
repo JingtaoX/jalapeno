@@ -1,0 +1,85 @@
+import "primitives/core.fil";
+
+// Example: Resource pools and binding in Jalapeno
+//
+// This demonstrates HLS-style resource sharing using pools and bindings.
+// The scheduler will determine:
+// 1. How many physical instances are needed
+// 2. When each operation executes
+// 3. Which operation maps to which instance
+
+comp pool_example<'G: ?>(
+  a1: ['G, 'G+1] 32,
+  a2: ['G, 'G+1] 32,
+  a3: ['G, 'G+1] 32,
+  a4: ['G, 'G+1] 32,
+  a5: ['G, 'G+1] 32,
+  a6: ['G, 'G+1] 32,
+) -> (out: [?, ?] 32)
+{
+  // =========================================================================
+  // Pool Declaration
+  // =========================================================================
+
+  // Declare a pool of at most 2 adders - scheduler will try to minimize
+  pool Adders : Add[32] * 2;
+
+  // =========================================================================
+  // Anonymous Binding: A[?]
+  // =========================================================================
+  // Scheduler freely decides which instance to use for each operation.
+  // This is traditional HLS style - maximum scheduling freedom.
+
+  b1 := Adders[?]<?t1>(a1, a2);    // scheduler picks instance
+  b2 := Adders[?]<?t2>(a3, a4);    // scheduler picks instance (maybe same, maybe different)
+
+  // =========================================================================
+  // Named Binding: A[?x]
+  // =========================================================================
+  // Multiple uses of same binding var MUST use the same instance.
+  // This forces serialization when operations would otherwise overlap.
+
+  // These two operations share instance ?shared - they MUST serialize
+  c1 := Adders[?shared]<?t3>(a1, a3);
+  c2 := Adders[?shared]<?t4>(a2, a4);  // same ?shared = same instance
+
+  // This uses a different binding var - could be different instance
+  c3 := Adders[?other]<?t5>(a5, a6);
+
+  // =========================================================================
+  // Explicit Binding: A[0], A[1]
+  // =========================================================================
+  // Forces specific instance index. Use to guarantee non-sharing.
+
+  d1 := Adders[0]<?t6>(b1.out, b2.out);  // explicitly instance 0
+  d2 := Adders[1]<?t7>(c1.out, c2.out);  // explicitly instance 1 - can be parallel with d1
+
+  // Final result
+  e := Adders[?]<?t8>(d1.out, d2.out);
+
+  out = e.out;
+}
+
+// =========================================================================
+// Unbounded Pool Example
+// =========================================================================
+// When you don't want to constrain resource count
+
+comp unbounded_example<'G: ?>(
+  a: ['G, 'G+1] 32,
+  b: ['G, 'G+1] 32,
+  c: ['G, 'G+1] 32,
+  d: ['G, 'G+1] 32,
+) -> (out: [?, ?] 32)
+{
+  // Unbounded pool - scheduler decides how many instances
+  pool A : Add[32] * ?;
+
+  // All operations could potentially run in parallel
+  // (if no other constraints prevent it)
+  x := A[?]<?t1>(a, b);
+  y := A[?]<?t2>(c, d);
+  z := A[?]<?t3>(x.out, y.out);
+
+  out = z.out;
+}

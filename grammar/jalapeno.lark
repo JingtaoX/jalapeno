@@ -1,0 +1,196 @@
+// Jalapeno Grammar - Filament with HLS Extensions
+// Supports: scheduler variables (?t), range offsets ([lo..hi]), pools, bindings
+
+// ==================== File Structure ====================
+start: import_stmt* module_def*
+
+import_stmt: "import" STRING ";"
+
+module_def: comp_module | extern_block
+
+// ==================== Module Definition ====================
+
+comp_module: "comp" IDENT params? abstract_vars? io constraints? "{" command* "}"
+
+extern_block: "extern" STRING "{" (signature ";")* "}"
+
+signature: "comp" IDENT params? abstract_vars? io constraints?
+
+// ==================== Parameters ====================
+
+params: "[" param ("," param)* "]"
+param: IDENT
+
+// ==================== Abstract Variables (Timeline) ====================
+// Events are quoted: 'G, etc.
+
+abstract_vars: "<" event_bind ("," event_bind)* ">"
+event_bind: event ":" sched_var    -> event_bind_sched
+          | event ":" expr         -> event_bind_expr
+          | event                  -> event_bind_no_ii
+
+event: "'" IDENT
+
+// ==================== Scheduler Variables ====================
+// Named: ?t_b1, ?foo  |  Anonymous: ?
+sched_var: "?" IDENT    -> sched_var_named
+         | "?"          -> sched_var_anon
+
+// ==================== Time Expressions ====================
+// Supports: 'G, 'G+1, 'G+[4..], ?t_b1, ?t_b1+1, ?t_b1+[2..4], ?
+
+time: event "+" range_offset       -> time_event_range
+    | event "+" expr               -> time_offset
+    | event                        -> time_event
+    | sched_var "+" range_offset   -> time_sched_range
+    | sched_var "+" expr           -> time_sched_offset
+    | sched_var                    -> time_sched
+    | "?" IDENT "=" time           -> time_named_bind
+    | "?" IDENT ".e" "+" expr      -> time_loop_end_offset
+    | "?" IDENT ".e"               -> time_loop_end
+
+// ==================== Range Offset ====================
+// [2..4] bounded, [4..] lower-bounded, [..4] upper-bounded
+range_offset: "[" expr ".." expr "]"    -> range_bounded
+            | "[" expr ".." "]"         -> range_lo_only
+            | "[" ".." expr "]"         -> range_hi_only
+
+// ==================== Intervals ====================
+// Supports: ['G, 'G+1], [?, ?] (anonymous for port outputs)
+
+interval: "[" time_or_anon "," time_or_anon "]"
+
+time_or_anon: time
+            | "?"    -> time_anon
+
+// ==================== IO Signature ====================
+
+io: "(" input_ports ")" "->" "(" output_ports ")"
+input_ports: port_defs?
+output_ports: port_defs?
+
+port_defs: port_def ("," port_def)* ","?
+
+port_def: IDENT ":" "interface" "[" event "]"    -> port_interface
+        | IDENT "[" NUMBER "]" ":" interval expr  -> port_bundle_signal
+        | IDENT ":" interval expr                 -> port_signal
+
+// ==================== Constraints ====================
+
+constraints: "where" constraint ("," constraint)*
+
+constraint: expr ORDER_OP expr
+
+ORDER_OP: ">=" | "<=" | "==" | ">" | "<"
+
+// ==================== Commands ====================
+
+command: pool_decl
+       | instance
+       | invocation
+       | bundle_decl
+       | connect
+       | timeloop
+       | spaceloop
+       | if_stmt
+       | param_let
+
+// ==================== Pool Declaration ====================
+// pool A : Add[32] * 2;   -- at most 2 instances
+// pool A : Add[32] * ?;   -- unbounded (scheduler decides)
+
+pool_decl: "pool" IDENT ":" IDENT conc_params? "*" pool_size ";"
+
+pool_size: expr    -> pool_max      // at most N
+         | "?"     -> pool_unbounded // scheduler decides
+
+// ==================== Instance ====================
+// A := new Add[32];
+instance: IDENT ":=" "new" IDENT conc_params? invoke_args? ";"
+
+conc_params: "[" expr ("," expr)* "]"
+
+// ==================== Invocation ====================
+// Traditional: result := A<'G>(a, b);
+// With binding: result := A[?]<?t>(a, b);      -- anonymous binding
+//               result := A[0]<?t>(a, b);      -- explicit index
+//               result := A[?x]<?t>(a, b);     -- named binding var
+invocation: IDENT ":=" IDENT binding_index? invoke_args ";"
+
+binding_index: "[" bind_idx "]"
+
+bind_idx: "?" IDENT    -> bind_named      // ?x - named binding var
+        | "?"          -> bind_anon       // ? - anonymous (scheduler picks)
+        | expr         -> bind_explicit   // 0, 1, etc. - explicit index
+
+invoke_args: "<" time ("," time)* ">" arguments
+
+arguments: "(" ")"
+         | "(" port_expr ("," port_expr)* ")"
+
+// ==================== Bundle Declaration ====================
+// bundle twiddle[2]: ['G, 'G+1] 32;   -- 2-element wire array
+bundle_decl: "bundle" IDENT "[" NUMBER "]" ":" interval expr ";"
+
+// Connection: out = in;
+connect: port_expr "=" port_expr ";"
+
+// ==================== Time Loop ====================
+// Pipelined loop with modulo scheduling.
+// timeloop<'G> [II=4] for i in 0..N { ... }
+// timeloop<'G> [II=?] for i in 0..N { ... }  -- solver determines II
+timeloop: "timeloop" timeloop_start timeloop_ii? "for" IDENT "in" expr ".." expr "{" command* "}"
+
+timeloop_start: "<" time ">"
+
+timeloop_ii: "[" "II" "=" ii_val "]"
+ii_val: "?"    -> ii_anon
+      | expr   -> ii_expr
+
+// ==================== Space Loop ====================
+// Structural duplication — unrolled, no cross-iteration scheduling.
+// spaceloop<'G> for i in 0..N { ... }
+spaceloop: "spaceloop" "<" time ">" "for" IDENT "in" expr ".." expr "{" command* "}"
+
+if_stmt: "if" expr_cmp "{" command* "}" ("else" "{" command* "}")?
+
+param_let: "let" IDENT "=" expr ";"
+
+expr_cmp: expr ORDER_OP expr
+
+// ==================== Port Expressions ====================
+// Bundle access uses {} to avoid conflict with [] (component params / binding)
+
+port_expr: IDENT "." IDENT "{" expr "}"    -> port_bundle_qualified
+         | IDENT "{" expr "}"              -> port_bundle_simple
+         | IDENT "." IDENT                -> port_qualified
+         | IDENT                          -> port_simple
+         | NUMBER                         -> port_literal
+
+// ==================== Expressions ====================
+
+?expr: term (ADD_OP term)*
+
+?term: factor (MUL_OP factor)*
+
+?factor: "(" expr ")"
+       | IDENT    -> expr_ident
+       | NUMBER   -> expr_number
+
+ADD_OP: "+" | "-"
+MUL_OP: "*" | "/" | "%"
+
+// ==================== Terminals ====================
+
+IDENT: /[_a-zA-Z][_a-zA-Z0-9]*/
+NUMBER: /[0-9]+/
+STRING: /"[^"]*"/
+
+// ==================== Ignored ====================
+
+%import common.WS
+%ignore WS
+
+COMMENT: "//" /[^\n]*/
+       | "/*" /(.|\n)*?/ "*/"
+%ignore COMMENT

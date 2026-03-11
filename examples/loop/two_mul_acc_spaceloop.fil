@@ -1,0 +1,31 @@
+// out[i] = a[i]*b[i] + c[i]*d[i]  for i=0..7
+//
+// Fully spatially unrolled: 8 independent lanes, each with two multipliers
+// and one adder. No accumulation across iterations — each lane is standalone.
+//
+// After IR unrolling, each lane i becomes:
+//   M0_i := new Mult[32];  M1_i := new Mult[32];  A_i := new Add[32];
+//   m0_i := M0_i<'G>(a{i}, b{i});
+//   m1_i := M1_i<'G>(c{i}, d{i});
+//   r_i  := A_i<'G>(m0_i.out, m1_i.out);
+//   out{i} = r_i.out;
+//
+// All 8 lanes fire at 'G in parallel.
+
+comp TwoMulAccSpaceloop<'G>(
+  a[8]: ['G, ?] 32,
+  b[8]: ['G, ?] 32,
+  c[8]: ['G, ?] 32,
+  d[8]: ['G, ?] 32,
+) -> (
+  out[8]: [?, ?] 32,
+) {
+  pool M : Mult[32] * 2;  // 4 multipliers shared across 8 lanes
+  pool A : Add[32]  * 2;  // 4 adders shared across 8 lanes
+  spaceloop<'G> for i in 0..4 {
+    m0 := M[?]<?>(a{i}, b{i});
+    m1 := M[?]<?>(c{i}, d{i});
+    r  := A[?]<?>(m0.out, m1.out);
+    out{i} = r.out;
+  }
+}

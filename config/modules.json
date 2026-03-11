@@ -1,0 +1,33 @@
+{
+  "description": "Module latency and resource configuration",
+  "modules": {
+    "Add": {
+      "latency": 1,
+      "description": "Integer adder"
+    },
+    "Sub": {
+      "latency": 1,
+      "description": "Integer subtractor"
+    },
+    "Mult": {
+      "latency": 3,
+      "description": "Integer multiplier"
+    },
+    "Div": {
+      "latency": 10,
+      "description": "Integer divider"
+    },
+    "FAdd": {
+      "latency": 4,
+      "description": "Floating-point adder"
+    },
+    "FMult": {
+      "latency": 5,
+      "description": "Floating-point multiplier"
+    },
+    "Reg": {
+      "latency": 1,
+      "description": "Register (1 cycle delay)"
+    }
+  }
+}

@@ -1,0 +1,52 @@
+// Timeloop example: pipelined MAC (multiply-accumulate)
+//
+// Demonstrates timeloop and spaceloop syntax:
+//   - timeloop<'G> [II=?]  — loop starts at 'G, solver picks II
+//   - timeloop<'G> [II=4]  — loop starts at 'G, fixed II=4
+//   - spaceloop<'G>        — structural duplication, no scheduling
+
+comp mac[N, W]<'G: ?>(
+    a: ['G, 'G+1] W,
+    b: ['G, 'G+1] W,
+) -> (
+    out: [?, ?] W
+) where N > 0, W > 0
+{
+    pool M : Mult[W] * 2;
+    pool A : Add[W]  * 1;
+
+    // Pipelined loop: solver determines II, iteration 0 starts at 'G
+    timeloop<'G> [II=?] for i in 0..N {
+        m := M[?u]<?t>(a, b);
+        r := A[?v]<?t2>(m.out, a);
+    }
+}
+
+comp fixed_ii[N, W]<'G: 1>(
+    x: ['G, 'G+1] W,
+    y: ['G, 'G+1] W,
+) -> (
+    out: [?, ?] W
+) where N > 0
+{
+    pool M : Mult[W] * 1;
+
+    // User-fixed II=4, loop starts at 'G
+    timeloop<'G> [II=4] for i in 0..N {
+        m := M[?]<?t>(x, y);
+    }
+}
+
+comp duplicated[W]<'G: 1>(
+    x: ['G, 'G+1] W,
+    y: ['G, 'G+1] W,
+) -> (
+    out: ['G+1, 'G+2] W
+) where W > 0
+{
+    // Space loop: 4 independent adder instances, no cross-iteration scheduling
+    spaceloop<'G> for i in 0..4 {
+        A := new Add[W];
+        r := A<'G>(x, y);
+    }
+}

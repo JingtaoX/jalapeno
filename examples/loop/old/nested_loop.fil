@@ -1,0 +1,47 @@
+// 2-lane parallel MAC pipeline — TimeLoop outer + SpaceLoop inner
+//
+// C equivalent:
+//   for (int i = 0; i < 8; i++) {         // pipelined — timeloop
+//     out[0] += a[0][i] * b[0][i];        // lane 0: multiply then add
+//     out[1] += a[1][i] * b[1][i];        // lane 1: same, independent
+//   }
+//
+// Each iteration reads one element from each input bundle (2 lanes in parallel).
+// The two lanes are spatially duplicated by the inner spaceloop — each gets
+// its own Mult and Add instance, so they always run at the same time.
+//
+// Intra-iteration dependency in each lane:
+//   m{j} fires at ?t
+//   r{j} fires at ?t2, must wait for m{j}.out  =>  t2 >= t + latency(Mult) = 3
+//
+// The timeloop pipelines 8 iterations with II determined by the solver.
+// Resource constraint: 2 multipliers (one per lane) and 2 adders available,
+// so the minimum II is set entirely by the Mult latency chain: II >= 1.
+// With latency(Mult)=3 and latency(Add)=1, solver picks t=0, t2=3.
+//
+// After IR lowering:
+//   SpaceLoop is unrolled into the LoopRegion body:
+//     m_0 := M_0[?u0]<?t>(a{0}, b{0});     lane 0
+//     r_0 := A_0[?v0]<?t2>(m_0.out, c{0});
+//     m_1 := M_1[?u1]<?t>(a{1}, b{1});     lane 1
+//     r_1 := A_1[?v1]<?t2>(m_1.out, c{1});
+//   TimeLoop becomes a LoopRegion with trip_count=8, ii=? (solver decides)
+
+comp mac_2lane<'G: ?>(
+    a[2]: ['G, 'G+1] 32,
+    b[2]: ['G, 'G+1] 32,
+    c[2]: ['G, 'G+1] 32,
+) -> (
+    out[2]: [?, ?] 32,
+)
+{
+    pool M : Mult[32] * 2;
+    pool A : Add[32]  * 2;
+
+    timeloop<'G> [II=?] for i in 0..8 {
+        spaceloop<'G> for j in 0..2 {
+            m := M[?u]<?t>(a{j}, b{j});
+            r := A[?v]<?t2>(m.out, c{j});
+        }
+    }
+}

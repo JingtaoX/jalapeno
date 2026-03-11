@@ -1,0 +1,30 @@
+import "primitives/core.fil";
+
+// Pure HLS-style, unscheduled program
+// No explicit timing, no Delay.
+// Timeline variables (?t*) will be solved by a scheduler.
+
+comp three_adds<'G: ?>(
+  a1: ['G, 'G+2] 32,
+  a2: ['G, 'G+2] 32,
+  a3: ['G, 'G+2] 32,
+  a4: ['G, 'G+2] 32,
+) -> (out: ['G+2, 'G+3] 32)
+{
+  // Pool of 2 adders - scheduler must respect resource constraints
+  pool A : Add[32] * 2;
+
+  // Independent adds - can potentially run in parallel (pool has 2 units)
+  b1 := A[0]<?>(a1, a2);    // b1.out : [?t_b1, ?t_b1+1]
+  b2 := A[1]<?t_b2>(a3, a4);    // b2.out : [?t_b2, ?t_b2+1]
+
+  // Dependent add
+  o  := A[?]<?t_b2+[..2]>(b1.out, b2.out);
+  // here are other use of partial scheduling
+  // o  := A<?>(b1.out, b2.out); // anonymous questionmark
+  // o  := A<?t_b2+1>(b1.out, b2.out); // expression with named question mark for relative constraint, should be scheduled one cycle after ?t_b2
+  // o  := A<'G+[4..]>(b1.out, b2.out); // expression with lowerbounded range, should be scheduled later than 'G+4
+  // o  := A<?t_b2+[..4]>(b1.out, b2.out); // should be scheduled earlier than ?t_b2+4
+  // o  := A<?t_b1+[2..4]>(b1.out, b2.out); //should be scheduled between ?t_b1+
+  out = o.out;
+}

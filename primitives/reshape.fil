@@ -1,0 +1,233 @@
+import "primitives/core.fil";
+
+// A highly parameterized serializer. The parameters are:
+// * W: The width of the inputs
+// * N: The number of "bundles" to be produced
+// * B: The size of each bundle
+// * C: The number of cycles between each bundle
+// * H: The number of cycles each signal is held for
+//
+// The serializer consumes N*B inputs in over H cycles and produces
+// N bundles of B elements each every C cycles, and holds each output
+// for H cycles.
+//
+// The number of parameters can be overhelming to here is an example:
+// ```
+// s := new Serialize[8, 2, 32, 1, 1]<'G>(...)
+// ```
+// This is a serializer that accepts 16 32-bit inputs in the first cycle
+// and produces 8 bundles of 2 elements each every cycle, and holds each
+// output for one cycle each.
+//
+// In general, you probably don't want to use the C and H parameters at
+// all. They are most useful when the serializer is providing inputs to
+// a component that is not fully pipelined.
+comp Serialize[W, N, B, ?C=1, ?H=1]<'G: C*(N-1)+H>(
+    go: interface['G],
+    in[Tot]: ['G, 'G+H] W
+) -> (
+    /// We generate N bundles each of size B. The availability depends on the bundle.
+    out[N][B]: for<i> ['G+C*i, 'G+C*i+H] W
+) with {
+    let Tot = N*B;
+} where
+    N > 0,
+    B > 0,
+    C > 0,
+    H > 0
+{
+    for i in 0..N {
+        for j in 0..B {
+            let CurIdx = B*i+j;
+            if i > 0 {
+                d := new Register[W]<'G, 'G+C*i+H>(in{CurIdx});
+                out{i}{j} = d.out;
+            } else {
+                out{i}{j} = in{CurIdx};
+            }
+        }
+    }
+}
+
+
+// A highly parameterized deserializer. The parameters are:
+// * W: The width of the inputs
+// * N: The number of "bundles" to be consumed
+// * B: The size of each bundle
+// * C: The number of cycles between each bundle
+// * H: The number of cycles each signal is held for
+//
+// The deserializer consumes N bundles of B elements each every C cycles
+// where each input must be held for H cycles.
+// It produces all the outputs on cycle C*(N-1) and holds them for H cycles.the first
+//
+// The number of parameters can be overhelming to here is an example:
+// ```
+// s := new Deserialize[8, 2, 32, 1, 1]<'G>(...)
+// ```
+// This is a deserializer that accepts 8 bundles of 2 elements each every cycle,
+// and holds each input for one cycle each. It produces 16 32-bit outputs in the
+// in the 7th cycle and holds them for 1 cycle.
+//
+// In general, you probably don't want to use the C and H parameters at
+// all. They are most useful when the deserializer is consuming inputs from
+// a component that is not fully pipelined.
+comp Deserialize[W, N, B, ?C=1, ?H=1]<'G: End-1>(
+    go: interface['G],
+    in[N][B]: for<i> ['G+C*i, 'G+C*i+H] W
+) -> (
+    out[Tot]: ['G+Start, 'G+Start+H] W
+) with {
+    let Tot = N*B;
+    let Start = C*(N-1);
+    let End = Start+H;
+} where
+    N > 1,
+    B > 0,
+    C > 0,
+    H > 0
+{
+    for i in 0..N {
+        // Accepts B inputs this cycle and delay them
+        for j in 0..B {
+            let CurIdx = B*i+j;
+            if i < N-1 {
+                d := new Register[W]<'G+C*i, 'G+End>(in{i}{j});
+                out{CurIdx} = d.out;
+            } else {
+                // The last bundle is forwarded combinationally
+                out{CurIdx} = in{i}{j};
+            }
+        }
+    }
+}
+
+/// Take a bundle of length L that produces values every N and cycles and make
+/// it produce values every M cycles where M > N.
+comp Downsample[N, M, L, W]<'G: (M-N)*L>(
+    go: interface['G],
+    in[L]: for<p> ['G+N*p, 'G+N*p+1] W
+) -> (
+    out[L]: for<p> ['G+M*p, 'G+M*p+1] W
+) where N > 0, M > N {
+    for i in 0..L {
+        if i == 0 {
+            out{i} = in{i};
+        } else {
+            d := new Register[W]<'G+N*i, 'G+M*i+1>(in{i});
+            out{i} = d.out;
+        }
+    }
+}
+
+// Reduces a bundle of N wires of size W to a single wire of size W*N
+// {010, 101, 111} -> 010101111
+comp ConcatBundle[W, N, ?L=1]<'G: L>(
+   in[N]: ['G, 'G + L] W
+) -> (
+   out: ['G , 'G + L] W*N
+) where N > 0, W > 0, L > 0 {
+   if N == 1 {
+      out = in{0};
+   } else {
+      // recursively reduce
+      red := new ConcatBundle[W, N-1, L]<'G>(in{1..N});
+      c := new Concat[W, W*(N-1)]<'G, 'G+L>(in{0}, red.out);
+      out = c.out;
+   }
+}
+
+// Splits a wire of size W*N into a bundle of N wires of size W
+// 010101111 -> {010, 101, 111}
+comp SplitWire[W, N, ?L=1]<'G: L>(
+   in: ['G, 'G + L] W*N
+) -> (
+   out[N]: ['G, 'G + L] W
+) where N > 0, W > 0, L > 0 {
+   if N == 1 {
+      out{0} = in;
+   } else {
+      // Take the W most significant bits and put in the left
+      s := new Slice[W*N, W*N-1, W*(N-1)]<'G, 'G+L>(in);
+      out{0} = s.out;
+      // remaining bits
+      rem := new Slice[W*N, W*(N-1)-1, 0]<'G, 'G+L>(in);
+
+      spl := new SplitWire[W, N-1, L]<'G>(rem.out);
+      out{1..N} = spl.out{0..N-1};
+   }
+}
+
+// Decimates inputs in space. A module provides N inputs and this module
+// returns the first one as its output.
+comp DecimateSpace[W, N]<'G: 1>(
+  in[W]: ['G, 'G+1] W
+) -> (
+  out: ['G, 'G+1] W
+) where N > 0 {
+  out = in{0};
+}
+
+// Decimates inputs in time using a valid tag. Valid is asserted every N
+// cycles an input is sent into the module (i.e., `en` is asserted).
+comp DecimateTime[W, N]<'G: 1>(
+  en: interface['G],
+  in: ['G, 'G+1] W
+) -> (
+  out: ['G, 'G+1] W,
+  valid: ['G, 'G+1] 1
+) where W > 0, N > 0 {
+  let Bits = log2(N) + 1;
+  assume Bits > 0;
+
+  counter := new Counter[Bits, N]<'G>();
+  one := new Const[Bits, 1]<'G>();
+  eq := new Eq[Bits]<'G>(counter.out, one.out);
+
+  out = in;
+  valid = eq.out;
+}
+
+// Takes a stream of signals with a valid tag and produces a block of size
+// N where all the signals are valid.
+//
+// `block_valid` is only asserted the unit at collected `N` valid signals after
+// which it resets.
+comp CollectValid[W, N]<'G:1>(
+  en: interface['G],
+  in: ['G, 'G+1] W,
+  valid: ['G, 'G+1] 1
+) -> (
+  out[N]: ['G, 'G+1] W,
+  block_valid: ['G, 'G+1] 1
+) where W > 0 {
+  let Bits = log2(N)+1; assume Bits > 0;
+
+  // Increment the index if the value on the stream is valid
+  idx := new Prev[Bits, 1]<'G>(reset.out);
+  one := new Const[Bits, 1]<'G>();
+  zero_idx := new Const[Bits, 0]<'G>();
+  add := new Add[Bits]<'G>(idx.prev, one.out);
+  mux := new Mux[Bits]<'G>(valid, add.out, idx.prev);
+  reset := new Mux[Bits]<'G>(max_reached.out, zero_idx.out, mux.out);
+
+  // Are all the blocks valid?
+  n := new Const[Bits, N]<'G>();
+  // n_sub_1 := new Sub[Bits]<'G>(n.out, one.out);
+  max_reached := new Eq[Bits]<'G>(n.out, idx.prev);
+  block_valid = max_reached.out;
+
+  // Take the location index points to within the output block and assign the
+  // value to it (which then gets latched).
+  zero := new Const[W, 0]<'G>();
+  for i in 0..N {
+    p := new Prev[W, 1]<'G>(next.out);
+    v := new Const[Bits, i]<'G>();
+    eq := new Eq[Bits]<'G>(v.out, idx.prev);
+    eq_and_valid := new And[1]<'G>(eq.out, valid);
+    assign_mux := new Mux[W]<'G>(eq_and_valid.out, in, p.prev);
+    // max ? 0 : eq ? in : p;
+    next := new Mux[W]<'G>(max_reached.out, zero.out, assign_mux.out);
+    out{i} = p.prev;
+  }
+}

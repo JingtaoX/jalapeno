@@ -1,0 +1,77 @@
+import "primitives/core.fil";
+
+// Dot Product: result = (a1*b1 + a2*b2) + (a3*b3 + a4*b4)
+//
+// This example demonstrates ALL scheduling features in Jalapeno:
+//
+// BINDING FEATURES:
+// - [?]      Anonymous binding - scheduler decides which unit
+// - [?idx]   Named binding - operations with same name share unit
+// - [0], [1] Explicit binding - fixed to specific unit index
+//
+// TIMING FEATURES:
+// - <?>           Anonymous timing - scheduler decides when
+// - <?t_name>     Named timing - creates a scheduler variable
+// - <?t_name+3>   Relative timing - fixed offset from scheduler var
+// - <?t_name+[..2]> Range timing - bounded range constraint
+//
+// RESOURCE POOLS:
+// - pool M : Mult[32] * 2;  Two multipliers (latency=3)
+// - pool A : Add[32] * 2;   Two adders (latency=1)
+//
+// DEPENDENCY GRAPH:
+//
+//   a1,b1 -> m1 ─┐
+//                ├─> add1 ─┐
+//   a2,b2 -> m2 ─┘         │
+//                          ├─> final -> out
+//   a3,b3 -> m3 ─┐         │
+//                ├─> add2 ─┘
+//   a4,b4 -> m4 ─┘
+//
+// EXPECTED SCHEDULE (with Mult latency=3, Add latency=1):
+//   t=0: m1 on M[0], m3 on M[1]  (parallel, different units)
+//   t=3: m2 on M[0], m4 on M[1]  (parallel, different units, after m1/m3 done)
+//   t=6: add1 on A[?], add2 on A[?]  (parallel, wait for all mults)
+//   t=7: final on A[?]  (wait for both adds)
+//   Makespan: 8
+
+comp dot_product<'G: ?>(
+  a1: ['G, 'G+4] 32,
+  b1: ['G, 'G+4] 32,
+  a2: ['G, 'G+4] 32,
+  b2: ['G, 'G+4] 32,
+  a3: ['G, 'G+4] 32,
+  b3: ['G, 'G+4] 32,
+  a4: ['G, 'G+4] 32,
+  b4: ['G, 'G+4] 32,
+) -> (out: ['G+8, 'G+9] 32)
+{
+  // === Resource Pools ===
+  pool M : Mult[32] * 2;  // 2 multipliers, latency=3
+  pool A : Add[32] * 2;   // 2 adders, latency=1
+
+  // === Stage 1: Multiplications ===
+  // m1 and m2 share unit via NAMED BINDING [?u1]
+  // m2 has RELATIVE TIMING <?t_mul+3> (3 cycles after m1)
+  m1 := M[?u1]<?t_mul>(a1, b1);     // named binding + named timing
+  m2 := M[?u1]<?t_mul+3>(a2, b2);   // same unit, relative timing
+
+  // m3 and m4 share unit via NAMED BINDING [?u2]
+  m3 := M[?u2]<?>(a3, b3);          // named binding + anonymous timing
+  m4 := M[?u2]<'G+3>(a4, b4);      // same unit, hardcoded timing
+
+  // === Stage 2: Partial Sums ===
+  // add1 uses hardcoded BINDING [0] with NAMED TIMING <?t_add>
+  add1 := A[0]<?t_add>(m1.out, m2.out);
+
+  // add2 uses ANONYMOUS BINDING [?] with RANGE TIMING <?t_add+[..2]>
+  // Must start within 2 cycles of add1
+  add2 := A[?]<?t_add+[..2]>(m3.out, m4.out);
+
+  // === Stage 3: Final Result ===
+  // Fully ANONYMOUS - scheduler has complete freedom
+  final := A[?]<?>(add1.out, add2.out);
+
+  out = final.out;
+}

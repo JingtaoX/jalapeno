@@ -1,0 +1,105 @@
+import "primitives/reshape.fil";
+
+extern "state.sv" {
+   /// ANCHOR: register
+   // A register that can extend the lifetime of a signal to any required length.
+   comp Register[WIDTH]<'G: 'L-('G+1), 'L: 1>(
+      clk: 1,
+      reset: 1,
+      write_en: interface['G],
+      in: ['G, 'G+1] WIDTH,
+   ) -> (
+      out: ['G+1, 'L] WIDTH,
+   ) where 'L > 'G+1;
+   /// ANCHOR_END: register
+
+   // A comp that delays `in` by one cycle. Exactly the same as a register
+   // but does not require comp to provide `go` signal. If the comp
+   // additionally has no resource sharing, it can elide FSM generation.
+   comp Delay[WIDTH]<'G: 1>(
+      clk: 1,
+      reset: 1,
+      in: ['G, 'G+1] WIDTH,
+   ) -> (
+      out: ['G+1, 'G+2] WIDTH,
+   );
+
+   // A comp that extends `in` till `L`.
+   comp PassThroughRegister[WIDTH]<'G: 'L-('G+0), 'L: 1>(
+      clk: 1,
+      reset: 1,
+      write_en: interface['G],
+      in: ['G, 'G+1] WIDTH,
+   ) -> (
+      out: ['G, 'L] WIDTH,
+   ) where 'L > 'G;
+
+   // A comp that allows access to its previous stored value.
+   // Backend by a simple register
+   comp Prev[WIDTH, SAFE]<'G: 1>(
+      clk: 1,
+      reset: 1,
+      write_en: interface['G],
+      in: ['G, 'G+1] WIDTH,
+   ) -> (
+      prev: ['G, 'G+1] WIDTH,
+   );
+
+   // Prev comp that continuously updates its value
+   comp ContPrev[WIDTH, SAFE]<'G: 1>(
+      clk: 1,
+      reset: 1,
+      in: ['G, 'G+1] WIDTH,
+   ) -> (
+      prev: ['G, 'G+1] WIDTH,
+   );
+}
+
+/* ANCHOR: shift */
+// A component that delays `in` by D cycles.
+// Uses the Delay component under the hood.
+comp Shift[W, D, ?N=1]<'G: 1>(
+   in[N]: ['G, 'G+1] W
+) -> (
+   out[N]: ['G+D, 'G+D+1] W
+) where W > 0 {
+   in_concat := new ConcatBundle[W, N]<'G>(in{0..N});
+
+   bundle f[D+1]: for<k> ['G+k, 'G+k+1] W*N;
+
+   f{0} = in_concat.out;
+   for i in 0..D {
+      d := new Delay[W*N]<'G+i>(f{i});
+      f{i+1} = d.out;
+   }
+   out_split := new SplitWire[W, N]<'G+D>(f{D});
+   out{0..N} = out_split.out{0..N};
+}
+/* ANCHOR_END: shift */
+
+// A counter that counts up by one every time `en` is asserted and resets
+// when it reaches the value `N`.
+comp Counter[W, N]<'G:1>(
+  en: interface['G]
+) -> (out: ['G, 'G+1] W) with {
+  let Out = log2(N) + 1;
+} where W > 0 {
+  // Needed to ensure that N can fit within W.
+  let Bits = log2(N)+1;
+  assume Bits > 0;
+  assume W >= Bits;
+
+  one := new Const[Bits, 1]<'G>();
+  counter := new Prev[Bits, 1]<'G>(mux.out);
+  add := new Add[Bits]<'G>(counter.prev, one.out);
+
+  max := new Const[Bits, N]<'G>();
+  eq := new Eq[Bits]<'G>(add.out, max.out);
+
+  zero := new Const[Bits, 0]<'G>();
+  mux := new Mux[Bits]<'G>(eq.out, zero.out, add.out);
+
+  resized := new ZeroExtend[Bits, W]<'G>(counter.prev);
+
+  out = resized.out;
+}
